@@ -75,7 +75,6 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   CameraController controller;
-  String imagePath;
   String videoPath;
   VideoPlayerController videoController;
   VoidCallback videoPlayerListener;
@@ -117,7 +116,7 @@ class _MyHomePageState extends State<MyHomePage> {
               mainAxisAlignment: MainAxisAlignment.start,
               children: <Widget>[
                 _cameraTogglesRowWidget(),
-                _thumbnailWidget(),
+     //           _thumbnailWidget(),
               ],
             ),
           ),
@@ -126,7 +125,7 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  /// Display the preview from the camera (or a message if the preview is not available).
+  /// カメラからプレビューを表示します（プレビューが利用できない場合はメッセージ）。
   Widget _cameraPreviewWidget() {
     if (controller == null || !controller.value.isInitialized) {
       return const Text(
@@ -145,49 +144,12 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  /// Display the thumbnail of the captured image or video.
-  Widget _thumbnailWidget() {
-    return new Expanded(
-      child: new Align(
-        alignment: Alignment.centerRight,
-        child: videoController == null && imagePath == null
-            ? null
-            : new SizedBox(
-          child: (videoController == null)
-              ? new Image.file(new File(imagePath))
-              : new Container(
-            child: new Center(
-              child: new AspectRatio(
-                  aspectRatio: videoController.value.size != null
-                      ? videoController.value.aspectRatio
-                      : 1.0,
-                  child: new VideoPlayer(videoController)),
-            ),
-            decoration: new BoxDecoration(
-                border: new Border.all(color: Colors.pink)),
-          ),
-          width: 64.0,
-          height: 64.0,
-        ),
-      ),
-    );
-  }
-
-  /// Display the control bar with buttons to take pictures and record videos.
+  // ボタンを使ってコントロールバーを表示して、ビデオを録画します。
   Widget _captureControlRowWidget() {
     return new Row(
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       mainAxisSize: MainAxisSize.max,
       children: <Widget>[
-        new IconButton(
-          icon: const Icon(Icons.camera_alt),
-          color: Colors.blue,
-          onPressed: controller != null &&
-              controller.value.isInitialized &&
-              !controller.value.isRecordingVideo
-              ? onTakePictureButtonPressed
-              : null,
-        ),
         new IconButton(
           icon: const Icon(Icons.videocam),
           color: Colors.blue,
@@ -210,7 +172,7 @@ class _MyHomePageState extends State<MyHomePage> {
     );
   }
 
-  /// Display a row of toggle to select the camera (or a message if no camera is available).
+  /// カメラの種類を選択するトグルを表示します。
   Widget _cameraTogglesRowWidget() {
     final List<Widget> toggles = <Widget>[];
 
@@ -240,11 +202,13 @@ class _MyHomePageState extends State<MyHomePage> {
 
   String timestamp() => new DateTime.now().millisecondsSinceEpoch.toString();
 
+  /// スナックバーにファイルパスを表示します。
   void showInSnackBar(String message) {
     _scaffoldKey.currentState
         .showSnackBar(new SnackBar(content: new Text(message)));
   }
 
+  /// トグルボタンを押した時の処理をしています。
   void onNewCameraSelected(CameraDescription cameraDescription) async {
     if (controller != null) {
       await controller.dispose();
@@ -270,26 +234,14 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  void onTakePictureButtonPressed() {
-    takePicture().then((String filePath) {
-      if (mounted) {
-        setState(() {
-          imagePath = filePath;
-          videoController?.dispose();
-          videoController = null;
-        });
-        if (filePath != null) showInSnackBar('Picture saved to $filePath');
-      }
-    });
-  }
-
+  /// 録画ボタンを押した時に、ファイルパスがあればそれを表示します。
   void onVideoRecordButtonPressed() {
     startVideoRecording().then((String filePath) {
       if (mounted) setState(() {});
       if (filePath != null) showInSnackBar('Saving video to $filePath');
     });
   }
-
+  /// 録画を停止した時に、ファイルパスがあればそれを表示します。
   void onStopButtonPressed() {
     stopVideoRecording().then((_) {
       if (mounted) setState(() {});
@@ -297,6 +249,7 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
+  /// 非同期で保存先のパスを取得して録画を開始。
   Future<String> startVideoRecording() async {
     if (!controller.value.isInitialized) {
       showInSnackBar('Error: select a camera first.');
@@ -323,6 +276,7 @@ class _MyHomePageState extends State<MyHomePage> {
     return filePath;
   }
 
+  /// 録画を停止。
   Future<void> stopVideoRecording() async {
     if (!controller.value.isRecordingVideo) {
       return null;
@@ -334,58 +288,9 @@ class _MyHomePageState extends State<MyHomePage> {
     _showCameraException(e);
     return null;
     }
-
-    await _startVideoPlayer();
   }
 
-  Future<void> _startVideoPlayer() async {
-    final VideoPlayerController vcontroller =
-    new VideoPlayerController.file(new File(videoPath));
-    videoPlayerListener = () {
-      if (videoController != null && videoController.value.size != null) {
-      // Refreshing the state to update video player with the correct ratio.
-      if (mounted) setState(() {});
-      videoController.removeListener(videoPlayerListener);
-      }
-    };
-
-    vcontroller.addListener(videoPlayerListener);
-    await vcontroller.setLooping(true);
-    await vcontroller.initialize();
-    await videoController?.dispose();
-    if (mounted) {
-      setState(() {
-      imagePath = null;
-      videoController = vcontroller;
-    });
-  }
-    await vcontroller.play();
-  }
-
-  Future<String> takePicture() async {
-  if (!controller.value.isInitialized) {
-    showInSnackBar('Error: select a camera first.');
-    return null;
-  }
-    final Directory extDir = await getApplicationDocumentsDirectory();
-    final String dirPath = '${extDir.path}/Pictures/flutter_test';
-    await new Directory(dirPath).create(recursive: true);
-    final String filePath = '$dirPath/${timestamp()}.jpg';
-
-  if (controller.value.isTakingPicture) {
-    // A capture is already pending, do nothing.
-    return null;
-  }
-
-  try {
-    await controller.takePicture(filePath);
-  } on CameraException catch (e) {
-    _showCameraException(e);
-    return null;
-  }
-    return filePath;
-  }
-
+  // エラーが出た時の処理。
   void _showCameraException(CameraException e) {
     logError(e.code, e.description);
     showInSnackBar('Error: ${e.code}\n${e.description}');
