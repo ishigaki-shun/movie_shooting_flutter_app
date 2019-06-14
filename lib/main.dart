@@ -1,6 +1,37 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
+import 'dart:io';
 
-void main() => runApp(new MyApp());
+import 'package:camera/camera.dart';
+import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
+import 'package:movie_shooting_flutter_app/path_provider.dart';
+
+List<CameraDescription> cameras;
+
+Future<Null> main() async {
+  // Fetch the available cameras before initializing the app.
+  try {
+    cameras = await availableCameras();
+  } on CameraException catch (e) {
+    logError(e.code, e.description);
+  }
+  runApp(new MyApp());
+}
+
+void logError(String code, String message) =>
+    print('Error: $code\nError Message: $message');
+
+IconData getCameraLensIcon(CameraLensDirection direction) {
+  switch (direction) {
+    case CameraLensDirection.back:
+      return Icons.camera_rear;
+    case CameraLensDirection.front:
+      return Icons.camera_front;
+    case CameraLensDirection.external:
+      return Icons.camera;
+  }
+  throw new ArgumentError('Unknown lens direction');
+}
 
 class MyApp extends StatelessWidget {
   // This widget is the root of your application.
@@ -43,67 +74,226 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+  CameraController controller;
+  String videoPath;
+  VideoPlayerController videoController;
+  VoidCallback videoPlayerListener;
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
-  }
+  final GlobalKey<ScaffoldState> _scaffoldKey = new GlobalKey<ScaffoldState>();
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return new Scaffold(
+      key: _scaffoldKey,
       appBar: new AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: new Text(widget.title),
+        title: const Text('Camera example'),
       ),
-      body: new Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: new Column(
-          // Column is also layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Invoke "debug paint" (press "p" in the console where you ran
-          // "flutter run", or select "Toggle Debug Paint" from the Flutter tool
-          // window in IntelliJ) to see the wireframe for each widget.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            new Text(
-              'You have pushed the button this many times:',
+      body: new Column(
+        children: <Widget>[
+          new Expanded(
+            child: new Container(
+              child: new Padding(
+                padding: const EdgeInsets.all(1.0),
+                child: new Center(
+                  child: _cameraPreviewWidget(),
+                ),
+              ),
+              decoration: new BoxDecoration(
+                color: Colors.black,
+                border: new Border.all(
+                  color: controller != null && controller.value.isRecordingVideo
+                      ? Colors.redAccent
+                      : Colors.grey,
+                  width: 3.0,
+                ),
+              ),
             ),
-            new Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.display1,
+          ),
+          _captureControlRowWidget(),
+          new Padding(
+            padding: const EdgeInsets.all(5.0),
+            child: new Row(
+              mainAxisAlignment: MainAxisAlignment.start,
+              children: <Widget>[
+                _cameraTogglesRowWidget(),
+     //           _thumbnailWidget(),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
-      floatingActionButton: new FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: new Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
+
+  /// カメラからプレビューを表示します（プレビューが利用できない場合はメッセージ）。
+  Widget _cameraPreviewWidget() {
+    if (controller == null || !controller.value.isInitialized) {
+      return const Text(
+        'Tap a camera',
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 24.0,
+          fontWeight: FontWeight.w900,
+        ),
+      );
+    } else {
+      return new AspectRatio(
+        aspectRatio: controller.value.aspectRatio,
+        child: new CameraPreview(controller),
+      );
+    }
+  }
+
+  // ボタンを使ってコントロールバーを表示して、ビデオを録画します。
+  Widget _captureControlRowWidget() {
+    return new Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      mainAxisSize: MainAxisSize.max,
+      children: <Widget>[
+        new IconButton(
+          icon: const Icon(Icons.videocam),
+          color: Colors.blue,
+          onPressed: controller != null &&
+              controller.value.isInitialized &&
+              !controller.value.isRecordingVideo
+              ? onVideoRecordButtonPressed
+              : null,
+        ),
+        new IconButton(
+          icon: const Icon(Icons.stop),
+          color: Colors.red,
+          onPressed: controller != null &&
+              controller.value.isInitialized &&
+              controller.value.isRecordingVideo
+              ? onStopButtonPressed
+              : null,
+        )
+      ],
+    );
+  }
+
+  /// カメラの種類を選択するトグルを表示します。
+  Widget _cameraTogglesRowWidget() {
+    final List<Widget> toggles = <Widget>[];
+
+    if (cameras.isEmpty) {
+      return const Text('No camera found');
+    } else {
+      for (CameraDescription cameraDescription in cameras) {
+        toggles.add(
+          new SizedBox(
+            width: 90.0,
+            child: new RadioListTile<CameraDescription>(
+              title:
+              new Icon(getCameraLensIcon(cameraDescription.lensDirection)),
+              groupValue: controller?.description,
+              value: cameraDescription,
+              onChanged: controller != null && controller.value.isRecordingVideo
+                  ? null
+                  : onNewCameraSelected,
+            ),
+          ),
+        );
+      }
+    }
+
+    return new Row(children: toggles);
+  }
+
+  String timestamp() => new DateTime.now().millisecondsSinceEpoch.toString();
+
+  /// スナックバーにファイルパスを表示します。
+  void showInSnackBar(String message) {
+    _scaffoldKey.currentState
+        .showSnackBar(new SnackBar(content: new Text(message)));
+  }
+
+  /// トグルボタンを押した時の処理をしています。
+  void onNewCameraSelected(CameraDescription cameraDescription) async {
+    if (controller != null) {
+      await controller.dispose();
+    }
+    controller = new CameraController(cameraDescription, ResolutionPreset.high);
+
+    // If the controller is updated then update the UI.
+    controller.addListener(() {
+      if (mounted) setState(() {});
+      if (controller.value.hasError) {
+        showInSnackBar('Camera error ${controller.value.errorDescription}');
+      }
+    });
+
+    try {
+      await controller.initialize();
+    } on CameraException catch (e) {
+      _showCameraException(e);
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  /// 録画ボタンを押した時に、ファイルパスがあればそれを表示します。
+  void onVideoRecordButtonPressed() {
+    startVideoRecording().then((String filePath) {
+      if (mounted) setState(() {});
+      if (filePath != null) showInSnackBar('Saving video to $filePath');
+    });
+  }
+  /// 録画を停止した時に、ファイルパスがあればそれを表示します。
+  void onStopButtonPressed() {
+    stopVideoRecording().then((_) {
+      if (mounted) setState(() {});
+      showInSnackBar('Video recorded to: $videoPath');
+    });
+  }
+
+  /// 非同期で保存先のパスを取得して録画を開始。
+  Future<String> startVideoRecording() async {
+    if (!controller.value.isInitialized) {
+      showInSnackBar('Error: select a camera first.');
+      return null;
+    }
+
+    final Directory extDir = await getApplicationDocumentsDirectory();
+    final String dirPath = '${extDir.path}/Movies/flutter_test';
+    await new Directory(dirPath).create(recursive: true);
+    final String filePath = '$dirPath/${timestamp()}.mp4';
+
+    if (controller.value.isRecordingVideo) {
+      // A recording is already started, do nothing.
+      return null;
+    }
+
+    try {
+      videoPath = filePath;
+      await controller.startVideoRecording(filePath);
+    } on CameraException catch (e) {
+      _showCameraException(e);
+      return null;
+    }
+    return filePath;
+  }
+
+  /// 録画を停止。
+  Future<void> stopVideoRecording() async {
+    if (!controller.value.isRecordingVideo) {
+      return null;
+    }
+
+  try {
+    await controller.stopVideoRecording();
+    } on CameraException catch (e) {
+    _showCameraException(e);
+    return null;
+    }
+  }
+
+  // エラーが出た時の処理。
+  void _showCameraException(CameraException e) {
+    logError(e.code, e.description);
+    showInSnackBar('Error: ${e.code}\n${e.description}');
+  }
+
 }
